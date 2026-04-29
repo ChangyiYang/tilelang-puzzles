@@ -106,6 +106,9 @@ def tl_copy_1d_multi_threads(A):
 
     # TODO: Implement this function
 
+    with T.Kernel(1, threads=1024) as _:
+        T.copy(A, B)
+
     return B
 
 
@@ -153,12 +156,19 @@ def tl_copy_1d_parallel(A, BLOCK_N: int):
 
     # TODO: Implement this function
 
+    grid_dim = N // BLOCK_N
+
+    with T.Kernel(grid_dim, threads=256) as bx:
+        start_idx = bx * BLOCK_N
+        end_idx = (bx + 1) * BLOCK_N
+        T.copy(A[start_idx: end_idx], B[start_idx : end_idx])
+
     return B
 
 
 def run_copy_1d_parallel():
     print("\n=== Copy 1D Parallel ===\n")
-    N = 1024 * 256
+    N = 1024 * 1024 * 256
     BLOCK_N = 1024
     test_puzzle(tl_copy_1d_parallel, ref_copy_1d, {"N": N, "BLOCK_N": BLOCK_N})
     bench_puzzle(
