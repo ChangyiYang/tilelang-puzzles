@@ -106,50 +106,59 @@ def test_puzzle(
         print("Mean diff:", torch.mean(torch.abs(output_torch - output_tl)))
 
 
+def _time_fn(fn, args, warmups: int, repeats: int, trials: int) -> float:
+    """Run fn(*args) and return median per-call time across `trials` independent timed runs."""
+    import statistics
+
+    for _ in range(warmups):
+        fn(*args)
+    times = []
+    for _ in range(trials):
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        torch.cuda.synchronize()
+        start.record()
+        for _ in range(repeats):
+            fn(*args)
+        end.record()
+        torch.cuda.synchronize()
+        times.append(start.elapsed_time(end) / repeats)
+    return statistics.median(times)
+
+
 def bench_puzzle(
     puzzle_tl,
     puzzle_torch,
     tl_hyper_params: dict = {},
     bench_name: str = "Tilelang",
     bench_torch: bool = False,
+    verbose: bool = True,
 ):
-    """Benchmark a puzzle solution with given hyper parameters."""
+    """Benchmark a puzzle solution with given hyper parameters.
+
+    Runs multiple independent trials and returns the median to reduce noise from
+    GPU clock/L2 transients (the first trial right after compile is often a
+    far-out outlier).
+
+    Returns a dict {"tl": tl_time_ms, "torch": torch_time_ms or None}.
+    """
 
     warmups = 10
     repeats = 100
+    trials = 5  # take median across trials
 
     tl_kernel: JITKernel = puzzle_tl.compile(**tl_hyper_params)
 
     inputs_in_torch_tensors = _torch_tensor_materialize(tl_kernel.params)
 
-    # As the kernel may modify the input tensors, we make a copy of them.
-    # inputs_copy = [i.clone() for i in inputs_in_torch_tensors]
-
+    torch_time = None
     if bench_torch:
-        for _ in range(warmups):
-            puzzle_torch(*inputs_in_torch_tensors)
+        torch_time = _time_fn(puzzle_torch, inputs_in_torch_tensors, warmups, repeats, trials)
+        if verbose:
+            print(f"Torch time: {torch_time:.3f} ms (median of {trials} trials)")
 
-        torch_start = torch.cuda.Event(enable_timing=True)
-        torch_end = torch.cuda.Event(enable_timing=True)
-        torch.cuda.synchronize()
-        torch_start.record()
-        for _ in range(repeats):
-            puzzle_torch(*inputs_in_torch_tensors)
-        torch_end.record()
-        torch.cuda.synchronize()
-        torch_time = torch_start.elapsed_time(torch_end) / repeats
-        print(f"Torch time: {torch_time:.3f} ms")
+    tl_time = _time_fn(tl_kernel, inputs_in_torch_tensors, warmups, repeats, trials)
+    if verbose:
+        print(f"{bench_name} time: {tl_time:.3f} ms (median of {trials} trials)")
 
-    for _ in range(warmups):
-        tl_kernel(*inputs_in_torch_tensors)
-
-    tl_start = torch.cuda.Event(enable_timing=True)
-    tl_end = torch.cuda.Event(enable_timing=True)
-    torch.cuda.synchronize()
-    tl_start.record()
-    for _ in range(repeats):
-        tl_kernel(*inputs_in_torch_tensors)
-    tl_end.record()
-    torch.cuda.synchronize()
-    tl_time = tl_start.elapsed_time(tl_end) / repeats
-    print(f"{bench_name} time: {tl_time:.3f} ms")
+    return {"tl": tl_time, "torch": torch_time}

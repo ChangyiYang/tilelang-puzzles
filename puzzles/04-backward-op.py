@@ -56,6 +56,13 @@ def tl_mul_relu_bcast(A, B, BLOCK_N: int, BLOCK_M: int):
 
     # TODO: Implement this function
 
+    with T.Kernel(N//BLOCK_N, M//BLOCK_M, threads=256) as (bx, by):
+        for (i, j) in T.Parallel(BLOCK_N, BLOCK_M):
+            tmp_i = bx * BLOCK_N + i
+            tmp_j = by * BLOCK_M + j
+            C[tmp_i, tmp_j] = T.max(0, A[tmp_i, tmp_j] * B[tmp_j])
+
+
     return C
 
 
@@ -128,7 +135,12 @@ def tl_mul_relu_bwd(A, B, dC, BLOCK_N: int, BLOCK_M: int):
     dC: T.Tensor((N, M), dtype)
     dA = T.empty((N, M), dtype)
 
-    # TODO: Implement this function
+    with T.Kernel(N//BLOCK_N, M//BLOCK_M, threads=256) as (bx, by):
+        for i, j in T.Parallel(BLOCK_N, BLOCK_M):
+            tmp_i = bx * BLOCK_N + i
+            tmp_j = by * BLOCK_M + j
+
+            dA[tmp_i, tmp_j] = dC[tmp_i, tmp_j] * B[tmp_j] * T.if_then_else(A[tmp_i, tmp_j] * B[tmp_j] > 0, 1, 0)
 
     return dA
 
